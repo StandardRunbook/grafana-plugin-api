@@ -3,7 +3,6 @@ package main
 import (
 	"log"
 	"net/http"
-	"os"
 
 	"grafana-plugin-api/internal/api"
 	"grafana-plugin-api/internal/config"
@@ -25,10 +24,10 @@ func main() {
 	// Create API handler
 	handler := api.NewHandler(cfg)
 
-	// Verify tables exist
+	// Verify tables exist (only warn if it fails, don't exit)
 	if err := handler.VerifyTables(); err != nil {
-		log.Printf("Failed to verify ClickHouse tables: %v", err)
-		os.Exit(1)
+		log.Printf("Warning: Failed to verify ClickHouse tables: %v", err)
+		log.Printf("Server will continue and return mock data when ClickHouse is unavailable")
 	}
 
 	// Setup router
