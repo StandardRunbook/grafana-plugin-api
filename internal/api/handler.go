@@ -1,14 +1,13 @@
 package api
 
 import (
+	"encoding/json"
 	"log"
 	"net/http"
 	"time"
 
 	"grafana-plugin-api/internal/analyzer"
 	"grafana-plugin-api/internal/config"
-
-	"github.com/gin-gonic/gin"
 )
 
 type Handler struct {
@@ -17,12 +16,12 @@ type Handler struct {
 }
 
 type QueryLogsRequest struct {
-	Org        string    `json:"org" binding:"required"`
-	Dashboard  string    `json:"dashboard" binding:"required"`
-	PanelTitle string    `json:"panel_title" binding:"required"`
-	MetricName string    `json:"metric_name" binding:"required"`
-	StartTime  time.Time `json:"start_time" binding:"required"`
-	EndTime    time.Time `json:"end_time" binding:"required"`
+	Org        string    `json:"org"`
+	Dashboard  string    `json:"dashboard"`
+	PanelTitle string    `json:"panel_title"`
+	MetricName string    `json:"metric_name"`
+	StartTime  time.Time `json:"start_time"`
+	EndTime    time.Time `json:"end_time"`
 }
 
 type LogGroup struct {
@@ -64,24 +63,28 @@ func (h *Handler) VerifyTables() error {
 	return h.analyzer.VerifyTables()
 }
 
-func (h *Handler) QueryLogs(c *gin.Context) {
+func (h *Handler) QueryLogs(w http.ResponseWriter, r *http.Request) {
+	// Only allow POST
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "Method not allowed", "Only POST is allowed")
+		return
+	}
+
 	var req QueryLogsRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{
-			Error:   "Invalid request",
-			Message: err.Error(),
-			Code:    intPtr(400),
-		})
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "Invalid request", err.Error())
+		return
+	}
+
+	// Validate required fields
+	if req.Org == "" || req.Dashboard == "" || req.PanelTitle == "" || req.MetricName == "" {
+		writeJSONError(w, http.StatusBadRequest, "Invalid request", "Missing required fields")
 		return
 	}
 
 	// Validate time range
 	if !req.StartTime.Before(req.EndTime) {
-		c.JSON(http.StatusBadRequest, ErrorResponse{
-			Error:   "Invalid time range",
-			Message: "Start time must be before end time",
-			Code:    intPtr(400),
-		})
+		writeJSONError(w, http.StatusBadRequest, "Invalid time range", "Start time must be before end time")
 		return
 	}
 
@@ -97,7 +100,7 @@ func (h *Handler) QueryLogs(c *gin.Context) {
 	} else {
 		// Analyze logs using KL divergence
 		logGroups, err = h.analyzer.AnalyzeLogs(
-			c.Request.Context(),
+			r.Context(),
 			req.Org,
 			req.Dashboard,
 			req.PanelTitle,
@@ -185,8 +188,22 @@ func (h *Handler) QueryLogs(c *gin.Context) {
 		}
 	}
 
-	c.JSON(http.StatusOK, QueryLogsResponse{
+	writeJSON(w, http.StatusOK, QueryLogsResponse{
 		LogGroups: apiLogGroups,
+	})
+}
+
+func writeJSON(w http.ResponseWriter, status int, data interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(data)
+}
+
+func writeJSONError(w http.ResponseWriter, status int, error, message string) {
+	writeJSON(w, status, ErrorResponse{
+		Error:   error,
+		Message: message,
+		Code:    intPtr(status),
 	})
 }
 

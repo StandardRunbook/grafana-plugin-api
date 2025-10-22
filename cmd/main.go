@@ -6,9 +6,22 @@ import (
 
 	"grafana-plugin-api/internal/api"
 	"grafana-plugin-api/internal/config"
-
-	"github.com/gin-gonic/gin"
 )
+
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
 
 func main() {
 	// Load configuration
@@ -30,31 +43,20 @@ func main() {
 		log.Printf("Server will continue and return mock data when ClickHouse is unavailable")
 	}
 
-	// Setup router
-	router := gin.Default()
+	// Setup HTTP server
+	mux := http.NewServeMux()
+	mux.HandleFunc("/query_logs", handler.QueryLogs)
 
-	// CORS middleware
-	router.Use(func(c *gin.Context) {
-		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
-		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
-		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-
-		if c.Request.Method == "OPTIONS" {
-			c.AbortWithStatus(http.StatusNoContent)
-			return
-		}
-
-		c.Next()
-	})
-
-	// Routes
-	router.POST("/query_logs", handler.QueryLogs)
+	// Wrap with CORS middleware
+	server := &http.Server{
+		Addr:    cfg.Server.GetAddress(),
+		Handler: corsMiddleware(mux),
+	}
 
 	// Start server
-	addr := cfg.Server.GetAddress()
-	log.Printf("Starting Grafana Plugin API server on http://%s", addr)
+	log.Printf("Starting Grafana Plugin API server on http://%s", server.Addr)
 
-	if err := router.Run(addr); err != nil {
+	if err := server.ListenAndServe(); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
 	}
 }

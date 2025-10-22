@@ -10,13 +10,9 @@ import (
 	"time"
 
 	"grafana-plugin-api/internal/config"
-
-	"github.com/gin-gonic/gin"
 )
 
 func TestQueryLogsValidation(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
 	tests := []struct {
 		name           string
 		requestBody    interface{}
@@ -71,38 +67,11 @@ func TestQueryLogsValidation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Note: We can't fully test the handler without a real ClickHouse connection
-			// This test only validates the request validation logic
-
-			router := gin.New()
-
-			// Mock handler that only validates the request
-			router.POST("/query_logs", func(c *gin.Context) {
-				var req QueryLogsRequest
-				if err := c.ShouldBindJSON(&req); err != nil {
-					c.JSON(http.StatusBadRequest, ErrorResponse{
-						Error:   "Invalid request",
-						Message: err.Error(),
-						Code:    intPtr(400),
-					})
-					return
-				}
-
-				// Validate time range
-				if !req.StartTime.Before(req.EndTime) {
-					c.JSON(http.StatusBadRequest, ErrorResponse{
-						Error:   "Invalid time range",
-						Message: "Start time must be before end time",
-						Code:    intPtr(400),
-					})
-					return
-				}
-
-				// Return empty success response
-				c.JSON(http.StatusOK, QueryLogsResponse{
-					LogGroups: []LogGroup{},
-				})
-			})
+			// Create a mock handler
+			mockHandler := &Handler{
+				analyzer:      nil,
+				analyzerError: errors.New("mock error"),
+			}
 
 			// Marshal request body
 			var bodyBytes []byte
@@ -126,7 +95,7 @@ func TestQueryLogsValidation(t *testing.T) {
 			w := httptest.NewRecorder()
 
 			// Perform request
-			router.ServeHTTP(w, req)
+			mockHandler.QueryLogs(w, req)
 
 			// Check status code
 			if w.Code != tt.expectedStatus {
@@ -302,8 +271,6 @@ func TestNewHandlerWithoutClickHouse(t *testing.T) {
 }
 
 func TestQueryLogsWithoutClickHouse(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
 	// Create handler without ClickHouse
 	cfg := &config.Config{
 		ClickHouse: config.ClickHouseConfig{
@@ -315,9 +282,6 @@ func TestQueryLogsWithoutClickHouse(t *testing.T) {
 	}
 
 	handler := NewHandler(cfg)
-
-	router := gin.New()
-	router.POST("/query_logs", handler.QueryLogs)
 
 	// Create valid request
 	reqBody := QueryLogsRequest{
@@ -338,7 +302,7 @@ func TestQueryLogsWithoutClickHouse(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 
 	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	handler.QueryLogs(w, req)
 
 	// Should return 200 with mock data
 	if w.Code != http.StatusOK {
@@ -397,10 +361,6 @@ func TestHandlerWithMockAnalyzer(t *testing.T) {
 		analyzerError: errors.New("mock connection error"),
 	}
 
-	gin.SetMode(gin.TestMode)
-	router := gin.New()
-	router.POST("/query_logs", handler.QueryLogs)
-
 	reqBody := QueryLogsRequest{
 		Org:        "test-org",
 		Dashboard:  "test-dashboard",
@@ -415,7 +375,7 @@ func TestHandlerWithMockAnalyzer(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 
 	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	handler.QueryLogs(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Errorf("Expected status 200, got %d", w.Code)
