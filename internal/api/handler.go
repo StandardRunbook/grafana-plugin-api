@@ -92,26 +92,69 @@ func (h *Handler) QueryLogs(c *gin.Context) {
 	if err != nil {
 		log.Printf("Error analyzing logs: %v", err)
 
-		// Return a friendly error message as a log group instead of failing
-		// This way Grafana always shows something to the user
-		errorMessage := "⚠️  Hover log database encountered an error. Please contact support."
-
+		// Return mock data when ClickHouse is not available
 		if containsStr(err.Error(), "Connection refused") ||
 			containsStr(err.Error(), "connect") ||
 			containsStr(err.Error(), "timeout") {
-			errorMessage = "⚠️  Hover log database is not connected. Please check ClickHouse connection."
+
+			// Return mock logs that clearly indicate they are examples
+			logGroups = []analyzer.LogGroup{
+				{
+					RepresentativeLogs: []string{
+						"⚠️  MOCK DATA: ClickHouse database is not connected",
+						"📝 Example anomaly: ERROR: Out of memory on node-3",
+						"📝 Example anomaly: WARNING: High CPU usage detected (95%)",
+						"📝 Example anomaly: CRITICAL: Disk space below 5%",
+					},
+					RelativeChange: 2.5,
+					KLContribution: 0.8,
+					TemplateID:     "mock_error_template",
+				},
+				{
+					RepresentativeLogs: []string{
+						"📝 Example pattern: Connection timeout after 30s",
+						"📝 Example pattern: Retrying connection attempt 3/5",
+					},
+					RelativeChange: 1.2,
+					KLContribution: 0.4,
+					TemplateID:     "mock_warning_template",
+				},
+				{
+					RepresentativeLogs: []string{
+						"📝 Example info: Service started successfully",
+						"📝 Example info: Health check passed",
+					},
+					RelativeChange: 0.3,
+					KLContribution: 0.1,
+					TemplateID:     "mock_info_template",
+				},
+			}
 		} else if containsStr(err.Error(), "does not exist") ||
 			containsStr(err.Error(), "UNKNOWN_TABLE") {
-			errorMessage = "⚠️  Required tables missing. Please restart the service to auto-create tables."
-		}
-
-		logGroups = []analyzer.LogGroup{
-			{
-				RepresentativeLogs: []string{errorMessage},
-				RelativeChange:     0.0,
-				KLContribution:     0.0,
-				TemplateID:         "error",
-			},
+			logGroups = []analyzer.LogGroup{
+				{
+					RepresentativeLogs: []string{
+						"⚠️  Required tables missing. Please restart the service to auto-create tables.",
+						"📝 MOCK DATA: These are example logs shown because tables don't exist yet",
+					},
+					RelativeChange: 0.0,
+					KLContribution: 0.0,
+					TemplateID:     "error",
+				},
+			}
+		} else {
+			// Generic error
+			logGroups = []analyzer.LogGroup{
+				{
+					RepresentativeLogs: []string{
+						"⚠️  Hover log database encountered an error. Please contact support.",
+						"Error details: " + err.Error(),
+					},
+					RelativeChange: 0.0,
+					KLContribution: 0.0,
+					TemplateID:     "error",
+				},
+			}
 		}
 	}
 
