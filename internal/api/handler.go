@@ -12,7 +12,8 @@ import (
 )
 
 type Handler struct {
-	analyzer *analyzer.LogAnalyzer
+	analyzer      *analyzer.LogAnalyzer
+	analyzerError error
 }
 
 type QueryLogsRequest struct {
@@ -42,15 +43,24 @@ type ErrorResponse struct {
 func NewHandler(cfg *config.Config) *Handler {
 	logAnalyzer, err := analyzer.NewLogAnalyzer(&cfg.ClickHouse)
 	if err != nil {
-		log.Fatalf("Failed to create log analyzer: %v", err)
+		log.Printf("Warning: Failed to create log analyzer: %v", err)
+		log.Printf("Handler will return mock data for all requests")
+		return &Handler{
+			analyzer:      nil,
+			analyzerError: err,
+		}
 	}
 
 	return &Handler{
-		analyzer: logAnalyzer,
+		analyzer:      logAnalyzer,
+		analyzerError: nil,
 	}
 }
 
 func (h *Handler) VerifyTables() error {
+	if h.analyzer == nil {
+		return h.analyzerError
+	}
 	return h.analyzer.VerifyTables()
 }
 
@@ -78,16 +88,24 @@ func (h *Handler) QueryLogs(c *gin.Context) {
 	log.Printf("Processing log query - org: %s, dashboard: %s, panel: %s, metric: %s, time range: %v to %v",
 		req.Org, req.Dashboard, req.PanelTitle, req.MetricName, req.StartTime, req.EndTime)
 
-	// Analyze logs using KL divergence
-	logGroups, err := h.analyzer.AnalyzeLogs(
-		c.Request.Context(),
-		req.Org,
-		req.Dashboard,
-		req.PanelTitle,
-		req.MetricName,
-		req.StartTime,
-		req.EndTime,
-	)
+	var logGroups []analyzer.LogGroup
+	var err error
+
+	// Check if analyzer is available
+	if h.analyzer == nil {
+		err = h.analyzerError
+	} else {
+		// Analyze logs using KL divergence
+		logGroups, err = h.analyzer.AnalyzeLogs(
+			c.Request.Context(),
+			req.Org,
+			req.Dashboard,
+			req.PanelTitle,
+			req.MetricName,
+			req.StartTime,
+			req.EndTime,
+		)
+	}
 
 	if err != nil {
 		log.Printf("Error analyzing logs: %v", err)

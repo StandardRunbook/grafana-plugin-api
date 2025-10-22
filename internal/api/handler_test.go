@@ -3,10 +3,13 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"grafana-plugin-api/internal/config"
 
 	"github.com/gin-gonic/gin"
 )
@@ -270,5 +273,158 @@ func TestContainsStr(t *testing.T) {
 		if result != tt.expect {
 			t.Errorf("containsStr(%q, %q) = %v, expected %v", tt.s, tt.substr, result, tt.expect)
 		}
+	}
+}
+
+func TestNewHandlerWithoutClickHouse(t *testing.T) {
+	// Test that NewHandler doesn't panic when ClickHouse is unavailable
+	cfg := &config.Config{
+		ClickHouse: config.ClickHouseConfig{
+			URL:      "localhost:9999", // Invalid port
+			User:     "default",
+			Password: "",
+			Database: "default",
+		},
+	}
+
+	handler := NewHandler(cfg)
+	if handler == nil {
+		t.Fatal("Expected handler to be created even without ClickHouse")
+	}
+
+	if handler.analyzer != nil {
+		t.Error("Expected analyzer to be nil when ClickHouse is unavailable")
+	}
+
+	if handler.analyzerError == nil {
+		t.Error("Expected analyzerError to be set when ClickHouse is unavailable")
+	}
+}
+
+func TestQueryLogsWithoutClickHouse(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	// Create handler without ClickHouse
+	cfg := &config.Config{
+		ClickHouse: config.ClickHouseConfig{
+			URL:      "localhost:9999", // Invalid port
+			User:     "default",
+			Password: "",
+			Database: "default",
+		},
+	}
+
+	handler := NewHandler(cfg)
+
+	router := gin.New()
+	router.POST("/query_logs", handler.QueryLogs)
+
+	// Create valid request
+	reqBody := QueryLogsRequest{
+		Org:        "test-org",
+		Dashboard:  "test-dashboard",
+		PanelTitle: "test-panel",
+		MetricName: "test-metric",
+		StartTime:  time.Now().Add(-1 * time.Hour),
+		EndTime:    time.Now(),
+	}
+
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		t.Fatalf("Failed to marshal request: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/query_logs", bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	// Should return 200 with mock data
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", w.Code)
+	}
+
+	var resp QueryLogsResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("Failed to unmarshal response: %v", err)
+	}
+
+	// Should have mock log groups
+	if len(resp.LogGroups) == 0 {
+		t.Error("Expected mock log groups to be returned")
+	}
+
+	// Check that mock data is clearly labeled
+	foundMockLabel := false
+	for _, group := range resp.LogGroups {
+		for _, log := range group.RepresentativeLogs {
+			if containsStr(log, "MOCK DATA") || containsStr(log, "Example") {
+				foundMockLabel = true
+				break
+			}
+		}
+	}
+
+	if !foundMockLabel {
+		t.Error("Expected mock data to be clearly labeled")
+	}
+}
+
+func TestVerifyTablesWithoutClickHouse(t *testing.T) {
+	// Create handler without ClickHouse
+	cfg := &config.Config{
+		ClickHouse: config.ClickHouseConfig{
+			URL:      "localhost:9999", // Invalid port
+			User:     "default",
+			Password: "",
+			Database: "default",
+		},
+	}
+
+	handler := NewHandler(cfg)
+
+	err := handler.VerifyTables()
+	if err == nil {
+		t.Error("Expected error when verifying tables without ClickHouse")
+	}
+}
+
+func TestHandlerWithMockAnalyzer(t *testing.T) {
+	// Test that handler properly handles nil analyzer
+	handler := &Handler{
+		analyzer:      nil,
+		analyzerError: errors.New("mock connection error"),
+	}
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/query_logs", handler.QueryLogs)
+
+	reqBody := QueryLogsRequest{
+		Org:        "test-org",
+		Dashboard:  "test-dashboard",
+		PanelTitle: "test-panel",
+		MetricName: "test-metric",
+		StartTime:  time.Now().Add(-1 * time.Hour),
+		EndTime:    time.Now(),
+	}
+
+	bodyBytes, _ := json.Marshal(reqBody)
+	req := httptest.NewRequest(http.MethodPost, "/query_logs", bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", w.Code)
+	}
+
+	var resp QueryLogsResponse
+	json.Unmarshal(w.Body.Bytes(), &resp)
+
+	if len(resp.LogGroups) == 0 {
+		t.Error("Expected mock data to be returned")
 	}
 }
