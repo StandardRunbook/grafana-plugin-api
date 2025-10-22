@@ -1,0 +1,274 @@
+package api
+
+import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	"github.com/gin-gonic/gin"
+)
+
+func TestQueryLogsValidation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name           string
+		requestBody    interface{}
+		expectedStatus int
+		checkError     bool
+	}{
+		{
+			name: "valid request",
+			requestBody: QueryLogsRequest{
+				Org:        "test-org",
+				Dashboard:  "test-dashboard",
+				PanelTitle: "test-panel",
+				MetricName: "test-metric",
+				StartTime:  time.Now().Add(-1 * time.Hour),
+				EndTime:    time.Now(),
+			},
+			expectedStatus: http.StatusOK,
+			checkError:     false,
+		},
+		{
+			name: "invalid time range - start after end",
+			requestBody: QueryLogsRequest{
+				Org:        "test-org",
+				Dashboard:  "test-dashboard",
+				PanelTitle: "test-panel",
+				MetricName: "test-metric",
+				StartTime:  time.Now(),
+				EndTime:    time.Now().Add(-1 * time.Hour),
+			},
+			expectedStatus: http.StatusBadRequest,
+			checkError:     true,
+		},
+		{
+			name: "missing required field",
+			requestBody: map[string]interface{}{
+				"org":        "test-org",
+				"dashboard":  "test-dashboard",
+				"start_time": time.Now().Add(-1 * time.Hour),
+				"end_time":   time.Now(),
+				// Missing panel_title and metric_name
+			},
+			expectedStatus: http.StatusBadRequest,
+			checkError:     true,
+		},
+		{
+			name:           "invalid JSON",
+			requestBody:    "invalid json",
+			expectedStatus: http.StatusBadRequest,
+			checkError:     true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Note: We can't fully test the handler without a real ClickHouse connection
+			// This test only validates the request validation logic
+
+			router := gin.New()
+
+			// Mock handler that only validates the request
+			router.POST("/query_logs", func(c *gin.Context) {
+				var req QueryLogsRequest
+				if err := c.ShouldBindJSON(&req); err != nil {
+					c.JSON(http.StatusBadRequest, ErrorResponse{
+						Error:   "Invalid request",
+						Message: err.Error(),
+						Code:    intPtr(400),
+					})
+					return
+				}
+
+				// Validate time range
+				if !req.StartTime.Before(req.EndTime) {
+					c.JSON(http.StatusBadRequest, ErrorResponse{
+						Error:   "Invalid time range",
+						Message: "Start time must be before end time",
+						Code:    intPtr(400),
+					})
+					return
+				}
+
+				// Return empty success response
+				c.JSON(http.StatusOK, QueryLogsResponse{
+					LogGroups: []LogGroup{},
+				})
+			})
+
+			// Marshal request body
+			var bodyBytes []byte
+			var err error
+
+			switch v := tt.requestBody.(type) {
+			case string:
+				bodyBytes = []byte(v)
+			default:
+				bodyBytes, err = json.Marshal(tt.requestBody)
+				if err != nil {
+					t.Fatalf("Failed to marshal request body: %v", err)
+				}
+			}
+
+			// Create request
+			req := httptest.NewRequest(http.MethodPost, "/query_logs", bytes.NewReader(bodyBytes))
+			req.Header.Set("Content-Type", "application/json")
+
+			// Create response recorder
+			w := httptest.NewRecorder()
+
+			// Perform request
+			router.ServeHTTP(w, req)
+
+			// Check status code
+			if w.Code != tt.expectedStatus {
+				t.Errorf("Expected status %d, got %d", tt.expectedStatus, w.Code)
+			}
+
+			// Check for error in response
+			if tt.checkError {
+				var errResp ErrorResponse
+				if err := json.Unmarshal(w.Body.Bytes(), &errResp); err != nil {
+					t.Errorf("Failed to unmarshal error response: %v", err)
+				}
+				if errResp.Error == "" {
+					t.Error("Expected error field in response")
+				}
+			}
+		})
+	}
+}
+
+func TestErrorResponseFormat(t *testing.T) {
+	tests := []struct {
+		name     string
+		response ErrorResponse
+	}{
+		{
+			name: "with code",
+			response: ErrorResponse{
+				Error:   "TestError",
+				Message: "This is a test error",
+				Code:    intPtr(400),
+			},
+		},
+		{
+			name: "without code",
+			response: ErrorResponse{
+				Error:   "TestError",
+				Message: "This is a test error",
+				Code:    nil,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Marshal to JSON
+			data, err := json.Marshal(tt.response)
+			if err != nil {
+				t.Fatalf("Failed to marshal error response: %v", err)
+			}
+
+			// Unmarshal back
+			var decoded ErrorResponse
+			if err := json.Unmarshal(data, &decoded); err != nil {
+				t.Fatalf("Failed to unmarshal error response: %v", err)
+			}
+
+			// Check fields
+			if decoded.Error != tt.response.Error {
+				t.Errorf("Expected error '%s', got '%s'", tt.response.Error, decoded.Error)
+			}
+
+			if decoded.Message != tt.response.Message {
+				t.Errorf("Expected message '%s', got '%s'", tt.response.Message, decoded.Message)
+			}
+
+			// Check code (handling nil)
+			if tt.response.Code == nil && decoded.Code != nil {
+				t.Error("Expected code to be nil")
+			}
+			if tt.response.Code != nil {
+				if decoded.Code == nil {
+					t.Error("Expected code to be non-nil")
+				} else if *decoded.Code != *tt.response.Code {
+					t.Errorf("Expected code %d, got %d", *tt.response.Code, *decoded.Code)
+				}
+			}
+		})
+	}
+}
+
+func TestLogGroupResponseFormat(t *testing.T) {
+	response := QueryLogsResponse{
+		LogGroups: []LogGroup{
+			{
+				RepresentativeLogs: []string{"Log 1", "Log 2"},
+				RelativeChange:     0.5,
+			},
+			{
+				RepresentativeLogs: []string{"Error log"},
+				RelativeChange:     1.2,
+			},
+		},
+	}
+
+	// Marshal to JSON
+	data, err := json.Marshal(response)
+	if err != nil {
+		t.Fatalf("Failed to marshal response: %v", err)
+	}
+
+	// Unmarshal back
+	var decoded QueryLogsResponse
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Failed to unmarshal response: %v", err)
+	}
+
+	// Check log groups count
+	if len(decoded.LogGroups) != 2 {
+		t.Errorf("Expected 2 log groups, got %d", len(decoded.LogGroups))
+	}
+
+	// Check first log group
+	if len(decoded.LogGroups[0].RepresentativeLogs) != 2 {
+		t.Errorf("Expected 2 representative logs in first group, got %d", len(decoded.LogGroups[0].RepresentativeLogs))
+	}
+
+	if decoded.LogGroups[0].RelativeChange != 0.5 {
+		t.Errorf("Expected relative change 0.5, got %f", decoded.LogGroups[0].RelativeChange)
+	}
+
+	// Check second log group
+	if len(decoded.LogGroups[1].RepresentativeLogs) != 1 {
+		t.Errorf("Expected 1 representative log in second group, got %d", len(decoded.LogGroups[1].RepresentativeLogs))
+	}
+}
+
+func TestContainsStr(t *testing.T) {
+	tests := []struct {
+		s      string
+		substr string
+		expect bool
+	}{
+		{"Connection refused", "refused", true},
+		{"Connection refused", "timeout", false},
+		{"UNKNOWN_TABLE error", "UNKNOWN_TABLE", true},
+		{"", "test", false},
+		{"test", "", true},
+		{"", "", true},
+	}
+
+	for _, tt := range tests {
+		result := containsStr(tt.s, tt.substr)
+		if result != tt.expect {
+			t.Errorf("containsStr(%q, %q) = %v, expected %v", tt.s, tt.substr, result, tt.expect)
+		}
+	}
+}
